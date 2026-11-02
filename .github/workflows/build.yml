@@ -1,0 +1,66 @@
+name: Build HybridFG
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ekstrak zip
+        run: |
+          ZIP=$(find . -maxdepth 3 -iname 'HybridFG*.zip' -not -path './.git/*' | head -n1)
+          if [ -n "$ZIP" ]; then
+            echo "Mengekstrak: $ZIP"
+            rm -rf _src && mkdir _src
+            unzip -q "$ZIP" -d _src
+            SETTINGS=$(find _src -name settings.gradle | head -n1)
+          else
+            echo "Zip tidak ada, memakai source di repo"
+            SETTINGS=$(find . -maxdepth 2 -name settings.gradle | head -n1)
+          fi
+          if [ -z "$SETTINGS" ]; then
+            echo "settings.gradle tidak ditemukan"
+            exit 1
+          fi
+          DIR=$(cd "$(dirname "$SETTINGS")" && pwd)
+          echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+          echo "Project: $DIR"
+          ls "$DIR"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Android SDK (lisensi, NDK, CMake)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;android-34" "build-tools;34.0.0" "cmake;3.22.1" "ndk;26.1.10909125" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
+
+      - name: Debug keystore
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android \
+              -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+      - name: Build APK
+        run: |
+          cd "$PROJECT_DIR"
+          gradle :app:assembleRelease --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HybridFG-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/release/*.apk
